@@ -1,132 +1,210 @@
 # COGS Tool
 
-Simple, precise COGS calculator that fetches financial fields from the AC_API_SERVER and computes Cost of Goods Sold in a way that is easy to audit.
+[![License](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
+
+Simple, precise Cost of Goods Sold (COGS) calculator that fetches financial fields from an AC API server and returns a reproducible, auditable COGS calculation for a company and year.
 
 ---
 
-## What this tool does ??
+## Table of Contents
 
-- Connects to the AC_API_SERVER and downloads a company's **balance sheet** and **profit & loss (P&L)** for a given year.  
-- Pulls the numbers we need: **Inventory**, **Capital Work In Progress (CWIP)**, and **Cost of Revenue**.  
-- Uses a simple, standard accounting formula to return a clear COGS number plus an **audit trail** that explains every step.
+- [Overview](#overview)
+- [Features](#features)
+- [Quickstart](#quickstart)
+- [Configuration (.env)](#configuration-env)
+- [Usage](#usage)
+  - [Python API example](#python-api-example)
+  - [Demo scripts](#demo-scripts)
+- [How it works](#how-it-works)
+- [Output format](#output-format)
+- [Testing](#testing)
+- [Contributing](#contributing)
+- [Project structure](#project-structure)
+- [License](#license)
 
 ---
 
-## Why use it? 💡
+## Overview
 
-- Reproducible: every result comes with an `audit_trail` string that explains the arithmetic used.  
-- Precise: all math uses Python's `decimal` module to avoid rounding surprises.  
-- Robust: works with a variety of nested API response shapes (labels, lists, common synonyms like `cogs`, `costOfSales`, `cwip`).
+This project provides a deterministic calculation of COGS using values pulled from a financial AC API. It focuses on correctness (use of Python's `decimal`), clarity (an `audit_trail` describing the arithmetic), and flexible parsing of API payloads.
+
+### Features
+
+- Fetches balance sheet and profit & loss for a company and year
+- Infers missing `purchases` from `costOfRevenue` when needed
+- Includes CWIP handling and reconciliation output
+- Returns results with a human-readable `audit_trail` for traceability
 
 ---
 
-## Quickstart — Setup (PowerShell)
+## Quickstart
 
-1. Create & activate a virtual environment:
+These steps get the project running locally for development and testing.
+
+1. Clone the repo (already done if you are working locally):
+
+```bash
+git clone https://github.com/f20251407/COGS-Calculator.git
+cd COGS-Calculator
+```
+
+2. Create and activate a virtual environment (Windows PowerShell):
 
 ```powershell
-python -m venv .venv; .\.venv\Scripts\Activate.ps1
+python -m venv .venv
+.\.venv\Scripts\Activate.ps1
 ```
 
-2. Install required packages:
+Or (macOS / Linux):
 
-```powershell
-pip install pydantic requests
+```bash
+python -m venv .venv
+source .venv/bin/activate
 ```
 
-3. Run tests to confirm everything is working:
+3. Install the requirements:
 
-```powershell
-.\.venv\Scripts\python.exe -m unittest tests.test_cogs
+```bash
+pip install -r requirements.txt
 ```
+
+> Tip: pin exact dependency versions in `requirements.txt` for reproducible installs.
 
 ---
 
-## How it works (simple version) 🔍
+## Configuration (.env)
 
-1. We fetch the balance sheet for the requested year and the previous year. The previous year gives us **opening inventory**, the requested year gives **closing inventory**.
-2. We fetch **costOfRevenue** from the P&L for that year.
-3. We treat CWIP as an extra cost layer and compute transfers between opening and closing CWIP.
-4. Because the API does not always provide a direct `purchases` number, we **imply purchases** from the reported `costOfRevenue` using the relationship in the formula below.
+The project reads runtime configuration from a `.env` file at the repository root. Do not check secrets into source control — `.env` is included in `.gitignore`.
 
-Formula used:
+Example `.env` (do not commit real secrets):
 
 ```
-COGS = Opening Inventory + Purchases + CWIP Transfers - Closing Inventory
+AC_API_KEY=your_api_key_here
+AC_BASE_URL=https://api.example.com
 ```
 
-Where Purchases are implied as:
-
-```
-Purchases = CostOfRevenue - Opening Inventory - CWIP Transfers + Closing Inventory
-```
-
-The tool performs these calculations using Decimals and returns the final number and a reconciliation line that compares the computed COGS to the reported `costOfRevenue`.
+- `AC_API_KEY`: API key used by `ACAPIClient` (sent as `x-api-key` header)
+- `AC_BASE_URL`: Base URL for the AC server (default in this repo was `http://localhost:3000`)
 
 ---
 
-## Output format (what you get back)
+## Usage
 
-All functions return dictionaries with two keys: `data` and `audit_trail`.
-
-- `data` contains the numeric results (strings of decimal values to be JSON-friendly). Example:
-
-```json
-{
-	"cogs": "150.00",
-	"reported_costOfRevenue": "150.00",
-	"implied_purchases": "95.00",
-	"cwip_transfers": "5.00",
-	"reconciliation": "0.00"
-}
-```
-
-- `audit_trail` is a single string describing each step (fetched fields, intermediate math, final reconciliation).
-
----
-
-## Example (Python)
+### Python API example
 
 ```py
 from src.ac_api_client import ACAPIClient
 from src.cogs import calculate_cogs_for_company
 
-client = ACAPIClient("http://localhost:3000", api_key="YOUR_API_KEY")
+client = ACAPIClient(base_url="https://api.example.com", api_key="YOUR_API_KEY")
 result = calculate_cogs_for_company(client, "AAPL", 2023)
-# handle result['data'] and result['audit_trail'] programmatically — functions return values (no printing inside)
+print(result['data'])
+print(result['audit_trail'])
 ```
 
-Notes:
-- Replace `http://localhost:3000` with your server base URL.
-- The client sends the API key in the header `x-api-key`.
+`calculate_cogs_for_company` returns a dictionary with numeric values (as strings) in `data` and a verbose `audit_trail` string explaining each step.
+
+### Demo scripts
+
+There are example scripts in `scripts/` demonstrating how to call the module with live or mocked data:
+
+```bash
+# Run a demo example (adjust script args as needed)
+python scripts/demo_real_example.py --company AAPL --year 2023
+
+# Example: a country-specific live run
+python scripts/live_run_india.py --year 2023
+```
+
+(If the scripts accept CLI args, use `--help` to view options.)
 
 ---
 
-## Assumptions & Limitations ⚠️
+## How it works
 
-- If the API omits a value, it is treated as zero (safe default).  
-- The tool infers purchases when they are not provided by the API; if you have a direct `purchases` field available, you can wire it in to replace the implied calculation.  
-- The parser is robust but may still miss extremely unusual response formats; feel free to open an issue with a sample payload and I can extend the pattern matching.
+At a high level, the tool:
+
+1. Fetches balance sheet and P&L for the requested year and previous year
+2. Extracts `opening_inventory`, `closing_inventory`, `costOfRevenue`, and `cwip` movements
+3. Infers `purchases` when not provided, using the relationship:
+
+```
+COGS = Opening Inventory + Purchases + CWIP Transfers - Closing Inventory
+```
+
+4. Performs all calculations using the `decimal` module for exact arithmetic and returns a `reconciliation` value to indicate any difference from reported fields.
+
+---
+
+## Output format
+
+Returned value example:
+
+```json
+{
+  "data": {
+    "cogs": "150.00",
+    "reported_costOfRevenue": "150.00",
+    "implied_purchases": "95.00",
+    "cwip_transfers": "5.00",
+    "reconciliation": "0.00"
+  },
+  "audit_trail": "Fetched balance_sheet.{...}; Opening inventory=...; Closing inventory=...; Computed purchases=...; Final COGS=..."
+}
+```
+
+`audit_trail` is intentionally verbose; it makes results easy to audit and debug.
 
 ---
 
 ## Testing
 
-Run unit tests that mock API responses and validate calculations:
+Unit tests use Python's `unittest` and mock API responses. Run tests locally:
 
-```powershell
-.\.venv\Scripts\python.exe -m unittest tests.test_cogs
+```bash
+pytest -q
+# or using unittest
+python -m unittest discover -v
 ```
+
+Add tests for any parsing edge cases or new calculation logic.
+
+---
+
+## CI / GitHub Actions
+
+This repository can use GitHub Actions to run tests on pull requests. Consider adding a workflow (e.g., `.github/workflows/ci.yml`) that:
+
+- Installs dependencies
+- Runs the test suite
+- Optionally runs linters (flake8, black)
+
+If you'd like, I can add a sample CI workflow for you.
 
 ---
 
 ## Contributing
 
-Contributions are welcome. Please follow the existing code style (Pydantic models, Decimal math, no print statements — functions must return values). Add unit tests for new cases.
+Thanks for contributing! A few guidelines:
+
+- Open an issue for large changes before creating a PR
+- Create a feature branch: `git checkout -b feat/your-thing`
+- Add unit tests for new behavior
+- Keep changes small and focused
+- Ensure tests pass locally before submitting a PR
+
+---
+
+## Project structure
+
+- `src/` — implementation modules (`ac_api_client.py`, `cogs.py`, `graph.py`, `models.py`)
+- `scripts/` — convenient runnable examples and live-run helpers
+- `tests/` — unit tests that mock the AC API responses
+- `.env` — local configuration (ignored by git)
 
 ---
 
 ## License
 
-This repository includes a `LICENSE` file; reuse accordingly.
+This project is licensed under the MIT License — see `LICENSE` for details.
 
